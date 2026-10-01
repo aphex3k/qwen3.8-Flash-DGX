@@ -28,8 +28,8 @@
 #                     overlap (+8% decode at 1 stream, +17% aggregate at 4, README); 512 = old inline path
 #   EFFORT_ALIAS=1    1 = accept reasoning_effort high/max (-> xhigh) and minimal (-> low): the checkpoint's
 #                     template only takes xhigh/medium/low and 400s the rest, including Claude Code's "high"
-#   LOG_REQUESTS=0    1 = log every prompt and output (VLLM_LOGGING_LEVEL=DEBUG, --enable-log-requests
-#                     --enable-log-outputs) for tools/vllm_watch.py. Debugging only: privacy + unbounded logs
+#   LOG_REQUESTS=0    1 = log every prompt and output (--enable-log-requests --enable-log-outputs, DEBUG on
+#                     vLLM's request logger only) for tools/vllm_watch.py. Debugging only: privacy + unbounded logs
 #   SERVED_MODEL_NAME=qwen3.8-flash-next   model name exposed by the OpenAI-compatible API
 #   PORT=18300        host port for the API
 #   CTX=262144        max context length (native). With YARN=1 up to ~500000 (see README)
@@ -222,7 +222,44 @@ DETENV+=(-e VLLM_PLE_MMAP_MADVISE="$MADVISE")
 # The module reads this with a silent fallback to 512 on anything unparsable, so refuse a bad value here.
 case "$FAST_ROWS" in ''|*[!0-9]*) echo "!! FAST_ROWS must be a non-negative integer (0 = thread pool for every gather, 512 = old inline path)"; exit 1 ;; esac
 DETENV+=(-e VLLM_PLE_MMAP_FAST_ROWS="$FAST_ROWS")
-LOGARGS=(); [ "$LOG_REQUESTS" = 1 ] && { DETENV+=(-e VLLM_LOGGING_LEVEL=DEBUG); LOGARGS=(--enable-log-requests --enable-log-outputs); }
+# LOG_REQUESTS=1: vLLM's request logger writes the outputs at INFO but the prompts at DEBUG, and
+# tools/vllm_watch.py reads both. So DEBUG goes to that one logger, through a logging config, and
+# everything else stays at INFO. A global VLLM_LOGGING_LEVEL=DEBUG floods the log and, on v0.30,
+# makes the op dispatcher (vllm/ir/op.py) format tensors during the drafter's CUDA-graph capture,
+# which invalidates it and kills the engine at boot (issue #47).
+LOGARGS=(); LOG_MNT=()
+if [ "$LOG_REQUESTS" = 1 ]; then
+  LOGCFG_HOST=""
+  for d in "$HF_CACHE/qwen38-flash-dgx" "${XDG_CACHE_HOME:-$HOME/.cache}/qwen38-flash-dgx" "$SERVE_ROOT/.cache"; do
+    if mkdir -p "$d" 2>/dev/null && [ -w "$d" ]; then LOGCFG_HOST="$d/vllm-logging-requests.json"; break; fi
+  done
+  if [ -z "$LOGCFG_HOST" ] || ! cat > "$LOGCFG_HOST" 2>/dev/null <<'JSON'
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "vllm": {
+      "class": "vllm.logging_utils.NewLineFormatter",
+      "datefmt": "%m-%d %H:%M:%S",
+      "format": "%(levelname)s %(asctime)s [%(fileinfo)s:%(lineno)d] %(message)s"
+    }
+  },
+  "handlers": {
+    "vllm": {"class": "logging.StreamHandler", "formatter": "vllm", "level": "DEBUG", "stream": "ext://sys.stdout"}
+  },
+  "loggers": {
+    "vllm": {"handlers": ["vllm"], "level": "INFO", "propagate": false},
+    "vllm.entrypoints.serve.utils.request_logger": {"level": "DEBUG"}
+  }
+}
+JSON
+  then
+    echo "!! LOG_REQUESTS: no writable place for the logging config (tried $HF_CACHE/qwen38-flash-dgx, ${XDG_CACHE_HOME:-$HOME/.cache}/qwen38-flash-dgx and $SERVE_ROOT/.cache)"; exit 1
+  fi
+  DETENV+=(-e VLLM_LOGGING_CONFIG_PATH=/qwen38/logging.json)
+  LOG_MNT=(-v "$LOGCFG_HOST:/qwen38/logging.json:ro")
+  LOGARGS=(--enable-log-requests --enable-log-outputs)
+fi
 PC_ARG=--no-enable-prefix-caching
 [ "$PREFIX_CACHE" = 1 ] && PC_ARG=--enable-prefix-caching
 
@@ -265,7 +302,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
   -v "$HF_CACHE:/hf" -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
   "${PROM_ARGS[@]}" \
-  "${CACHE_MNT[@]}" "${TEMPLATE_MNT[@]}" \
+  "${CACHE_MNT[@]}" "${TEMPLATE_MNT[@]}" "${LOG_MNT[@]}" \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
   -e VLLM_QSA_EXACT_TOPK="$EXACT_TOPK" "${DETENV[@]}" \
   -e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$ALLOW_LONG" \
