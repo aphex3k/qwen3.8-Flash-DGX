@@ -795,7 +795,7 @@ ports the findings that have a vLLM equivalent and leaves the rest documented as
 - **`CPUSET=5-9,15-19`** — the sibling pinned SGLang to the 10 Cortex-X5 performance
   cores and kept it in every measured config. Exposed as `CPUSET` → docker
   `--cpuset-cpus`. We did not measure a delta here yet; treat it as an unverified
-  port, and A/B it with `bench/perf.py` if you use it.
+  port and A/B it against the default before relying on it.
 
 **SGLang-specific (not ported, no vLLM equivalent in v0.30):**
 
