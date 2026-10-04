@@ -812,15 +812,53 @@ ports the findings that have a vLLM equivalent and leaves the rest documented as
 - `--mem-fraction-static 0.85` — the sibling's settled value; our `GPU_MEM` already
   covers this and its own measurements (0.80 stable, 0.875 OOM) are documented above.
 
-**Measurement caveats that also apply to this repo's benchmarks** (from the sibling's
-results, all of which were hit in the field):
+**Measurement caveats that also apply here** — the sibling's results document the traps it hit (boot-to-boot variance, greedy non-determinism, truncation reading as a quality regression); the [Benchmarking](#benchmarking) section below restates them as this repo's hygiene rules.
 
-- Boot-to-boot variance is ~8% on single-stream decode vs <2% run-to-run within one
-  boot; treat anything smaller than that as noise.
-- Temperature 0 is not bitwise deterministic (dynamic batching + speculation change
-  reduction order): expect ±2 HumanEval problems between identical runs.
-- Truncation reads as a quality regression — check `finish_reason == "length"` before
-  quoting a thinking-mode score.
+## Benchmarking
+
+`bench/` is a self-contained suite that measures this recipe the same way the
+[Qwen3.8-27B-on-DGX-Spark](https://github.com/aphex3k/Qwen3.8-27B-on-DGX-Spark/results/RESULTS.md)
+recipe was measured on the same hardware, so the two can be compared head to head:
+
+```bash
+export GB10_BASE_URL=http://127.0.0.1:18300/v1   # wherever `./flash serve` listens
+export GB10_MODEL=qwen3.8-flash-next
+
+python3 bench/perf.py             # TTFT, single-stream decode, concurrency sweep, prefill curve
+python3 bench/longctx.py          # concurrent long-context; unique content per stream
+./scripts/run-humaneval.sh        # HumanEval pass@1, thinking off (~5 min)
+./scripts/run-humaneval.sh think  # thinking on (~20 min)
+```
+
+Everything is env-driven (`GB10_BASE_URL`, `GB10_API_KEY`, `GB10_MODEL` — see
+`bench/common.py`) and the scripts are self-locating, so nothing is path-dependent.
+HumanEval needs one-time setup on the box:
+`python3 -m pip install --user pandas pyarrow huggingface_hub`; the dataset lands in
+`data/humaneval`, results in `results/` (both gitignored), and candidates are executed
+against their real unit tests in a `--network none` `python:3.12-slim` container.
+Thinking is toggled through the checkpoint's `reasoning_effort` template argument
+(`low` off, `xhigh` on — override with `GB10_REASONING_OFF` / `GB10_REASONING_ON`).
+
+Measurement hygiene — each of these has produced a wrong number before:
+
+- **Run on an idle box.** Any competing GPU work skews every figure.
+- **Boot-to-boot single-stream variance is ~8%**, against <2% run-to-run within one
+  instance. Size A/B deltas against that band; re-measure a small win on a fresh boot.
+- **Greedy is not bitwise-stable across batch shapes** (see the deterministic top-k
+  section); treat a pass@1 delta of ±2 HumanEval problems as noise.
+- **Truncation reads as a quality regression.** A capped `max_tokens` truncates
+  thinking runs; check `finish_reason == "length"` before quoting a score.
+  `run-humaneval.sh` reports truncated problems separately from real failures.
+- **Count `completion_tokens`, not stream events** — speculative decoding emits
+  several tokens per event.
+- **Long-context concurrency:** give every stream *unique* content, or the prefix cache
+  deduplicates it and you measure cache hits instead of KV capacity. Prefill
+  serialises, so read seconds-per-stream, not aggregate tok/s.
+- **Concurrency sweep:** raise `SEQS` to at least the highest stream count you sweep,
+  or excess requests queue silently and the aggregate flatlines (see above).
+- **Health probes:** a model saturated on long prefills is healthy but too busy to
+  answer a 5 s probe. If a supervisor watches the server, use ≥30 s timeouts or it will
+  restart a healthy, busy server mid-job.
 
 ## How it fits — the one idea
 
@@ -926,6 +964,8 @@ tools/vllm_watch.py               live per-session view of prompts / reasoning /
 scripts/serve.sh                  MODE=nvfp4|hybrid|hybrid-mtp, SERVED_MODEL_NAME, PREFIX_CACHE, DET_TOPK, DRAFT_VOCAB, MADVISE, EXACT_TOPK, KV_DTYPE, YARN, ...
 scripts/smoke-test.sh             health, coherence, prefix-cache hit, determinism, tok/s
 scripts/greedy-probe.sh           greedy probe set; diff two arms to gate a draft/checkpoint swap
+scripts/run-humaneval.sh          HumanEval end-to-end: generate -> sandboxed execution -> report
+bench/                            perf.py (TTFT/decode/concurrency/prefill), longctx.py, humaneval/ — the benchmark suite
 docs/HOW-IT-WORKS.md              how each patch works, with the measurements
 docs/HISTORY.md                   the earlier updates and the preview / v0.29 bases
 ```
