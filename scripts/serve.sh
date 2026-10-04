@@ -36,7 +36,7 @@
 #   YARN=0            1 = YaRN rope scaling (factor 4) for CTX > 262144
 #   SEQS=8            max concurrent sequences. Do NOT leave this at 1-2 when measuring
 #                     throughput: requests queue silently and aggregate tok/s flatlines
-#   CPUSET=           docker --cpuset-cpus: pin the container to specific cores. On GB10,
+#   CPUSET=5-9,15-19  docker --cpuset-cpus: pin the container to specific cores. On GB10,
 #                     "5-9,15-19" is the 10 Cortex-X5 performance cores (the SGLang sibling
 #                     recipe pins there). Empty (default) = all 20 cores
 #   MAMBA_SSM_DTYPE=  --mamba-ssm-cache-dtype for the GDN recurrent state pool. vLLM
@@ -82,7 +82,7 @@ PORT="${PORT:-18300}"
 CTX="${CTX:-262144}"
 YARN="${YARN:-0}"
 SEQS="${SEQS:-8}"
-CPUSET="${CPUSET:-}"
+CPUSET="${CPUSET:-5-9,15-19}"
 MAMBA_SSM_DTYPE="${MAMBA_SSM_DTYPE:-}"
 GPU_MEM="${GPU_MEM:-0.80}"
 MTP="${MTP:-2}"
