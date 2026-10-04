@@ -623,7 +623,7 @@ mmap patch should apply; we have not booted one ourselves.
 | `CTX` | `262144` | Max context. Native is 262144; with `YARN=1` up to `500000` is validated. |
 | `YARN` | `0` | `1` = YaRN rope scaling (factor 4, Qwen's recipe) for `CTX` > 262144. |
 | `SEQS` | `8` | Max concurrent sequences. **Do not benchmark with 1–2**: excess requests queue silently and aggregate tok/s flatlines (see below). |
-| `CPUSET` | | docker `--cpuset-cpus`: pin the container to specific cores. `5-9,15-19` is the 10 Cortex-X5 performance cores on the GB10 — the SGLang recipe for the 27B sibling model pinned its process there and kept it in its measured configs. Empty (default) = all 20 cores. |
+| `CPUSET` | `5-9,15-19` | docker `--cpuset-cpus`: pin the container to specific cores. Default is the 10 Cortex-X5 performance cores on the GB10 — the SGLang recipe for the 27B sibling model pinned its process there and kept it in its measured configs. `CPUSET=` (empty) = all 20 cores. |
 | `MAMBA_SSM_DTYPE` | | `--mamba-ssm-cache-dtype` for the GDN (mamba-style) recurrent state pool. vLLM defaults to `float32`; `bfloat16` halves that pool — on the 27B sibling model 30.9 GB → 15.6 GB at pool 80 — which is what frees the headroom to raise `SEQS`. See [the cross-referenced findings](#tuning-findings-cross-referenced-from-the-27b-sibling-recipe). |
 | `GPU_MEM` | `0.80` | Fraction of the 128 GB pool for weights+KV. `0.85` buys ~2 GiB more KV, but after a day at `0.85` the box drifted into swap, and `0.875` got OOM-killed on a 300k-token prefill with MTP. The lower you set it, the more RAM the page cache has for the 48 GiB table — which is what your prefill speed depends on (below). Right after stopping another big container the first boot can fail with "13.5 GiB KV cache is needed, larger than available" — memory not yet released; the `unless-stopped` retry succeeds. |
 | `MTP` | `2` | Speculative tokens from the model's MTP head (`0` = off). `3` is +7% decode but cost a point at the tournament (44 vs 45/51), so it stays an option. |
@@ -794,8 +794,9 @@ ports the findings that have a vLLM equivalent and leaves the rest documented as
   same principle applies: halving the pool is free KV/page-cache headroom.
 - **`CPUSET=5-9,15-19`** — the sibling pinned SGLang to the 10 Cortex-X5 performance
   cores and kept it in every measured config. Exposed as `CPUSET` → docker
-  `--cpuset-cpus`. We did not measure a delta here yet; treat it as an unverified
-  port and A/B it against the default before relying on it.
+  `--cpuset-cpus` and pinned by default for the same reason; `CPUSET=` (empty) runs
+  the container on all 20 cores. We did not measure a delta on this model yet, so
+  treat the pin as an unverified port until A/B'd.
 
 **SGLang-specific (not ported, no vLLM equivalent in v0.30):**
 
