@@ -21,7 +21,7 @@ kernel that drops candidates) — and offers an optional **hybrid** checkpoint l
 ## TL;DR — run it on a DGX Spark
 
 ```bash
-git clone https://github.com/blazux/qwen3.8-Flash-DGX.git && cd qwen3.8-Flash-DGX
+git clone https://github.com/aphex3k/qwen3.8-Flash-DGX.git && cd qwen3.8-Flash-DGX
 ./flash doctor      # docker, GPU, memory, disk, port, image, weights: tells you what is missing
 ./flash setup       # builds the image, downloads the checkpoint (NVIDIA's NVFP4, 124 GiB via Xet, resumable), prepares the hybrid layout
 ./flash serve       # the recommended recipe (profile "default"): hybrid, 500k context, deterministic
